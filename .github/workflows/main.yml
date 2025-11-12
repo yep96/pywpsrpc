@@ -10,40 +10,87 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.6", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
-    permissions:
-      id-token: write
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        arch: [x64, arm64]
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
 
     steps:
     - name: Checkout repository and submodules
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         submodules: recursive
+
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        architecture: ${{ matrix.arch }}
+
     - name: Install dependencies
       run: |
-        sudo apt install g++ qtbase5-dev qt5-default
+        sudo apt update
+        sudo apt install -y g++ qtbase5-dev
+        sudo apt install -y qt5-default || sudo apt install -y qtchooser qt5-qmake
+
         python -m pip install --upgrade pip
-        if [ "${{ matrix.python-version }}" == "3.6" ] || [ "${{ matrix.python-version }}" == "3.7" ]; then
-          python -m pip install sip==6.5.1 twine
-        else
-          python -m pip install sip twine
-        fi
-    - name: Build
+        python -m pip install sip
+
+    - name: Build wheel
       run: |
         sip-sdist
         sip-wheel --verbose
         mkdir -p dist
-        mv pywpsrpc-*.tar.gz pywpsrpc-*.whl dist
-    - name: Upload
-      if: ${{ github.ref_type == 'tag' || startsWith(github.event.head_commit.message, '[upload]') }}
-      uses: pypa/gh-action-pypi-publish@release/v1
+        mv pywpsrpc-*.tar.gz pywpsrpc-*.whl dist/
+
+        cd dist
+        for whl in pywpsrpc-*.whl; do
+          echo "Recompressing $whl ..."
+          tmpdir=$(mktemp -d)
+          unzip -q "$whl" -d "$tmpdir"
+          rm -f "$whl"
+          (cd "$tmpdir" && rm -rf pywpsrpc/bindings && zip -9r "$OLDPWD/$whl" . >/dev/null)
+          rm -rf "$tmpdir"
+          cd "$OLDPWD"
+        done
+        cd ..
+
+    - name: Upload wheel artifact
+      uses: actions/upload-artifact@v4
       with:
-        skip-existing: true
+        name: pywpsrpc-${{ matrix.arch }}-py${{ matrix.python-version }}
+        path: dist/pywpsrpc-*.whl
+
+  release:
+    name: Create Release and Upload Wheels
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: dist
+
+    - name: Create release name
+      id: date
+      run: echo "date=$(date +'%Y-%m-%d_%H-%M-%S')" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: release-${{ steps.date.outputs.date }}
+        name: Build ${{ steps.date.outputs.date }}
+        body: |
+          Automated build on ${{ steps.date.outputs.date }}
+          Includes all pywpsrpc wheel files for x86_64 and ARM64, Python 3.6–3.14.
+        files: dist/**/pywpsrpc-*.whl
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
