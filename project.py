@@ -27,7 +27,7 @@ class PyWpsRpcProject(sipbuild.Project):
         if sys.version_info >= (3, 9) or sipbuild.SIP_VERSION >= 0x060A00:
             self.abi_version = "12.10"
         else:
-            self.abi_version = "12"
+            self.abi_version = "12.9"
 
         sdk_dir = os.path.join(self.root_dir, "wpsrpc-sdk")
         self.bindings_factories = [RpcCommon, RpcWpsApi, RpcWppApi, RpcEtApi]
